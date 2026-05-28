@@ -218,7 +218,7 @@ Do not store API keys, database passwords, tokens, or auth credentials in `__mai
 
 ### 3.1 Services
 
-Replace the current n8n-first architecture with this service layout:
+Replace the old n8n-first architecture with this service layout:
 
 ```text
 video-subtitle-app/
@@ -250,7 +250,7 @@ Optional future service:
 whisper-gpu   Dedicated GPU-enabled transcription service
 ```
 
-### 3.2 Why use Redis and Postgres
+### 3.2 Use Redis and Postgres
 
 Use Postgres for durable state:
 
