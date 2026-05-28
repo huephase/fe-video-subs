@@ -1,0 +1,382 @@
+{
+  "name": "Video to Translated Hard Subs - v4 fixed async",
+  "nodes": [
+    {
+      "parameters": {},
+      "type": "n8n-nodes-base.manualTrigger",
+      "typeVersion": 1,
+      "position": [
+        -32,
+        256
+      ],
+      "id": "c0d4479b-47a4-4565-bd62-f1a8780d0b7c",
+      "name": "When clicking ‘Execute workflow’"
+    },
+    {
+      "parameters": {
+        "jsCode": "const cleanDir = (value, fallback) => String(value || fallback).trim().replace(/\\/+$/, '');\n\nconst inputDir = cleanDir($json.inputDir, '/video-data/videos');\nconst workRoot = cleanDir($json.workRoot, '/video-data/work');\nconst outputDir = cleanDir($json.outputDir, '/video-data/output');\n\nconst inputVideoFile = String($json.inputVideoFile || '').trim();\nif (!inputVideoFile) {\n  throw new Error('inputVideoFile is required, for example: Chicken_BLT_wrap.mp4');\n}\n\n// Example: Chicken_BLT_wrap.mp4 -> Chicken_BLT_wrap__mp4\nconst jobFolderName = inputVideoFile\n  .replace(/\\./g, '__')\n  .replace(/[^\\w-]+/g, '_')\n  .replace(/^_+|_+$/g, '');\n\nconst videoBaseName = inputVideoFile.replace(/\\.[^.]+$/, '');\nconst targetLanguage = String($json.targetLanguage || 'ar').trim();\n\nconst audioFile = String($json.audioFile || 'audio.wav').trim();\nconst englishSrtFile = String($json.englishSrtFile || 'english.srt').trim();\nconst translatedSrtFile = String($json.translatedSrtFile || 'translated.srt').trim();\nconst assFile = String($json.assFile || 'translated_styled.ass').trim();\n\nconst outputVideoFile = String($json.outputVideoFile || '').trim()\n  || `${videoBaseName}_${targetLanguage}_hardsub.mp4`;\n\nconst jobDir = `${workRoot}/${jobFolderName}`;\n\nconst toNumber = (value, fallback) => {\n  const n = Number(value);\n  return Number.isFinite(n) ? n : fallback;\n};\n\nconst toBool = (value, fallback = false) => {\n  if (typeof value === 'boolean') return value;\n  const s = String(value ?? '').trim().toLowerCase();\n  if (['true', '1', 'yes', 'y'].includes(s)) return true;\n  if (['false', '0', 'no', 'n'].includes(s)) return false;\n  return fallback;\n};\n\nreturn [\n  {\n    json: {\n      ...$json,\n\n      inputDir,\n      workRoot,\n      outputDir,\n\n      inputVideoFile,\n      audioFile,\n      englishSrtFile,\n      translatedSrtFile,\n      assFile,\n      outputVideoFile,\n\n      targetLanguage,\n\n      fontSize: toNumber($json.fontSize, 42),\n      subtitleAlignment: toNumber($json.subtitleAlignment, 2),\n      subtitleMarginV: toNumber($json.subtitleMarginV, 180),\n      subtitleMarginL: toNumber($json.subtitleMarginL, 80),\n      subtitleMarginR: toNumber($json.subtitleMarginR, 80),\n      subtitleOutline: toNumber($json.subtitleOutline, 3.5),\n      subtitleShadow: toNumber($json.subtitleShadow, 1.5),\n      subtitleBold: toBool($json.subtitleBold, true),\n      rtlPreprocess: toBool($json.rtlPreprocess, false),\n\n      jobFolderName,\n      jobDir,\n\n      inputVideo: `${inputDir}/${inputVideoFile}`,\n      audioPath: `${jobDir}/${audioFile}`,\n      englishSrt: `${jobDir}/${englishSrtFile}`,\n      translatedSrt: `${jobDir}/${translatedSrtFile}`,\n      assPath: `${jobDir}/${assFile}`,\n      outputVideo: `${outputDir}/${outputVideoFile}`,\n      statusFile: `${jobDir}/status.json`,\n    },\n  },\n];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        336,
+        320
+      ],
+      "id": "0dd23fa0-03e3-4a83-900f-f44b97477a48",
+      "name": "Build automated paths"
+    },
+    {
+      "parameters": {
+        "command": "=mkdir -p \"{{ $('Build automated paths').item.json.jobDir }}\" \"{{ $('Build automated paths').item.json.outputDir }}\""
+      },
+      "type": "n8n-nodes-base.executeCommand",
+      "typeVersion": 1,
+      "position": [
+        544,
+        320
+      ],
+      "id": "aecc6e1e-6e40-4245-bc83-2267d79c01e8",
+      "name": "Execute Command: Create job folder"
+    },
+    {
+      "parameters": {
+        "command": "=ffmpeg -y \\\n  -i \"{{ $('Build automated paths').item.json.inputVideo }}\" \\\n  -vn \\\n  -ac 1 \\\n  -ar 16000 \\\n  -c:a pcm_s16le \\\n  \"{{ $('Build automated paths').item.json.audioPath }}\""
+      },
+      "type": "n8n-nodes-base.executeCommand",
+      "typeVersion": 1,
+      "position": [
+        752,
+        320
+      ],
+      "id": "5964f104-7ecf-4016-bb93-f2975b9425c9",
+      "name": "Execute Command: Extract audio"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "http://whisper-api:8000/process_async",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"audio_path\": \"{{ $('Build automated paths').item.json.audioPath }}\",\n  \"english_srt_path\": \"{{ $('Build automated paths').item.json.englishSrt }}\",\n  \"translated_srt_path\": \"{{ $('Build automated paths').item.json.translatedSrt }}\",\n  \"ass_path\": \"{{ $('Build automated paths').item.json.assPath }}\",\n  \"job_dir\": \"{{ $('Build automated paths').item.json.jobDir }}\",\n  \"source_language\": \"{{ $('Build automated paths').item.json.sourceLanguage }}\",\n  \"target_language\": \"{{ $('Build automated paths').item.json.targetLanguage }}\",\n  \"font_name\": \"{{ $('Build automated paths').item.json.fontName }}\",\n  \"font_size\": {{ $('Build automated paths').item.json.fontSize }},\n  \"subtitle_alignment\": {{ $('Build automated paths').item.json.subtitleAlignment }},\n  \"subtitle_margin_v\": {{ $('Build automated paths').item.json.subtitleMarginV }},\n  \"subtitle_margin_l\": {{ $('Build automated paths').item.json.subtitleMarginL }},\n  \"subtitle_margin_r\": {{ $('Build automated paths').item.json.subtitleMarginR }},\n  \"subtitle_outline\": {{ $('Build automated paths').item.json.subtitleOutline }},\n  \"subtitle_shadow\": {{ $('Build automated paths').item.json.subtitleShadow }},\n  \"subtitle_bold\": {{ $('Build automated paths').item.json.subtitleBold }},\n  \"rtl_preprocess\": {{ $('Build automated paths').item.json.rtlPreprocess }}\n}",
+        "options": {
+          "timeout": 300000
+        }
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.3,
+      "position": [
+        960,
+        320
+      ],
+      "id": "50b42c11-8b8b-40ba-b11c-c7a89d67158b",
+      "name": "HTTP Request: Start async process"
+    },
+    {
+      "parameters": {
+        "command": "=STATUS_FILE=\"{{ $('Build automated paths').item.json.statusFile }}\"\nMAX_POLLS=480\nPOLL_SECONDS=60\ni=0\n\necho \"Waiting for Whisper API async job...\"\necho \"Status file: $STATUS_FILE\"\n\nwhile [ \"$i\" -lt \"$MAX_POLLS\" ]; do\n  if [ -f \"$STATUS_FILE\" ]; then\n    echo \"---- status check $i ----\"\n    cat \"$STATUS_FILE\"\n    echo \"\"\n\n    STATUS=$(grep -o '\"status\"[[:space:]]*:[[:space:]]*\"[^\"]*\"' \"$STATUS_FILE\" | head -n 1 | sed 's/.*\"status\"[[:space:]]*:[[:space:]]*\"\\([^\"]*\\)\".*/\\1/')\n\n    if [ \"$STATUS\" = \"done\" ]; then\n      echo \"Whisper API job completed.\"\n      exit 0\n    fi\n\n    if [ \"$STATUS\" = \"error\" ]; then\n      echo \"Whisper API job failed.\"\n      exit 1\n    fi\n  else\n    echo \"Status file not found yet: $STATUS_FILE\"\n  fi\n\n  i=$((i + 1))\n  sleep \"$POLL_SECONDS\"\ndone\n\necho \"Timed out waiting for async process after $((MAX_POLLS * POLL_SECONDS)) seconds.\"\nexit 1"
+      },
+      "type": "n8n-nodes-base.executeCommand",
+      "typeVersion": 1,
+      "position": [
+        1120,
+        320
+      ],
+      "id": "b1e7320f-ceb8-49ed-abc7-d1bddb633d34",
+      "name": "Execute Command: Wait for async process"
+    },
+    {
+      "parameters": {
+        "command": "=ls -lah \"{{ $('Build automated paths').item.json.outputVideo }}\" && echo \"Final video: {{ $('Build automated paths').item.json.outputVideo }}\" "
+      },
+      "type": "n8n-nodes-base.executeCommand",
+      "typeVersion": 1,
+      "position": [
+        1744,
+        320
+      ],
+      "id": "b0ba96fd-2ebc-4612-a38f-542ab333d283",
+      "name": "Execute Command: Confirm output"
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "55f08398-2f94-411a-88fb-eaa4aeecb3eb",
+              "name": "inputDir",
+              "value": "/video-data/videos",
+              "type": "string"
+            },
+            {
+              "id": "779454f5-adbd-429f-b1d0-7acb6d33fd22",
+              "name": "workRoot",
+              "value": "/video-data/work",
+              "type": "string"
+            },
+            {
+              "id": "745907b9-fd6b-496f-8b43-cbf6ae8b1180",
+              "name": "outputDir",
+              "value": "/video-data/output",
+              "type": "string"
+            },
+            {
+              "id": "ba1d101d-ab5b-41ae-8d0d-0bc29e9d8519",
+              "name": "inputVideoFile",
+              "value": "Aeronauts.mp4",
+              "type": "string"
+            },
+            {
+              "id": "5268e467-effa-4dd2-ba74-2192a9371099",
+              "name": "audioFile",
+              "value": "audio.wav",
+              "type": "string"
+            },
+            {
+              "id": "7edd480b-5dd0-4cce-99f2-f9bd28d506bb",
+              "name": "englishSrtFile",
+              "value": "english.srt",
+              "type": "string"
+            },
+            {
+              "id": "39a936cd-135e-4f96-a4c1-4331d9af3d2b",
+              "name": "translatedSrtFile",
+              "value": "translated.srt",
+              "type": "string"
+            },
+            {
+              "id": "e199e019-df97-41ba-be9b-7274f4325ae5",
+              "name": "assFile",
+              "value": "translated_styled.ass",
+              "type": "string"
+            },
+            {
+              "id": "0d00b2d7-8c2c-47bc-884e-b5f33e3e6d6a",
+              "name": "outputVideoFile",
+              "value": "",
+              "type": "string"
+            },
+            {
+              "id": "903402d8-a53d-49e0-a948-6ee3e5d681c1",
+              "name": "sourceLanguage",
+              "value": "en",
+              "type": "string"
+            },
+            {
+              "id": "fc8610c8-c0e9-4482-897a-297c35a62ae4",
+              "name": "targetLanguage",
+              "value": "fa",
+              "type": "string"
+            },
+            {
+              "id": "5dbe4a81-d4e4-4561-8b9e-c2568bbfa460",
+              "name": "fontName",
+              "value": "Noto Sans Arabic",
+              "type": "string"
+            },
+            {
+              "id": "02953961-dc65-4c9a-8992-3695a37da233",
+              "name": "fontSize",
+              "value": "42",
+              "type": "string"
+            },
+            {
+              "id": "1d501201-4db8-4fcd-b925-73411fd0f8ba",
+              "name": "subtitleAlignment",
+              "value": "2",
+              "type": "string"
+            },
+            {
+              "id": "95ca53a0-9bdc-4735-8987-0d90ceb19af2",
+              "name": "subtitleMarginV",
+              "value": "180",
+              "type": "string"
+            },
+            {
+              "id": "9b928610-8e37-4ecb-91a5-bf0e80365f5b",
+              "name": "subtitleMarginL",
+              "value": "80",
+              "type": "string"
+            },
+            {
+              "id": "dedd7c40-b7a6-4601-847f-fe583080a84b",
+              "name": "subtitleMarginR",
+              "value": "80",
+              "type": "string"
+            },
+            {
+              "id": "9997d029-524b-4f21-8a95-71656070b564",
+              "name": "subtitleOutline",
+              "value": "3.5",
+              "type": "string"
+            },
+            {
+              "id": "ac5287f0-0489-4776-b938-3f7c74a64c4d",
+              "name": "subtitleShadow",
+              "value": "1.5",
+              "type": "string"
+            },
+            {
+              "id": "31e2ec40-0c9d-456e-a363-b3e65219b807",
+              "name": "subtitleBold",
+              "value": "true",
+              "type": "string"
+            },
+            {
+              "id": "0d59908e-4b7b-4fb2-a52a-c907ebb7a0cb",
+              "name": "rtlPreprocess",
+              "value": "false",
+              "type": "string"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        144,
+        320
+      ],
+      "id": "2331a955-4f45-49e4-81d9-5ee012f47def",
+      "name": "MAIN VARIABLES"
+    },
+    {
+      "parameters": {
+        "command": "=echo \"Checking generated files in {{ $('Build automated paths').item.json.jobDir }}\" && \\\nls -lah \"{{ $('Build automated paths').item.json.jobDir }}\" && \\\ntest -s \"{{ $('Build automated paths').item.json.englishSrt }}\" && \\\ntest -s \"{{ $('Build automated paths').item.json.translatedSrt }}\" && \\\ntest -s \"{{ $('Build automated paths').item.json.assPath }}\" && \\\necho \"ASS subtitle exists: {{ $('Build automated paths').item.json.assPath }}\" "
+      },
+      "type": "n8n-nodes-base.executeCommand",
+      "typeVersion": 1,
+      "position": [
+        1328,
+        320
+      ],
+      "id": "03aedcaf-98a4-49c5-80ac-cadc21b49b20",
+      "name": "Execute Command: Verify subtitle files"
+    },
+    {
+      "parameters": {
+        "command": "=ffmpeg -y \\\n  -i \"{{ $('Build automated paths').item.json.inputVideo }}\" \\\n  -vf \"ass={{ $('Build automated paths').item.json.assPath }}\" \\\n  -c:v libx264 \\\n  -preset veryfast \\\n  -crf 20 \\\n  -c:a copy \\\n  \"{{ $('Build automated paths').item.json.outputVideo }}\" "
+      },
+      "type": "n8n-nodes-base.executeCommand",
+      "typeVersion": 1,
+      "position": [
+        1536,
+        320
+      ],
+      "id": "3f94800f-6f9b-4a89-8251-c021f1600976",
+      "name": "Execute Command: Burn subtitles"
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "When clicking ‘Execute workflow’": {
+      "main": [
+        [
+          {
+            "node": "MAIN VARIABLES",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "MAIN VARIABLES": {
+      "main": [
+        [
+          {
+            "node": "Build automated paths",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build automated paths": {
+      "main": [
+        [
+          {
+            "node": "Execute Command: Create job folder",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Execute Command: Create job folder": {
+      "main": [
+        [
+          {
+            "node": "Execute Command: Extract audio",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Execute Command: Extract audio": {
+      "main": [
+        [
+          {
+            "node": "HTTP Request: Start async process",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "HTTP Request: Start async process": {
+      "main": [
+        [
+          {
+            "node": "Execute Command: Wait for async process",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Execute Command: Wait for async process": {
+      "main": [
+        [
+          {
+            "node": "Execute Command: Verify subtitle files",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Execute Command: Verify subtitle files": {
+      "main": [
+        [
+          {
+            "node": "Execute Command: Burn subtitles",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Execute Command: Burn subtitles": {
+      "main": [
+        [
+          {
+            "node": "Execute Command: Confirm output",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "versionId": "2c1eea31-f756-4deb-9e6f-6b8eef6c6f5b",
+  "meta": {
+    "instanceId": "6a610aa3fa4c2d7a5a0135787dc17bbc164b73592238bafdf7ce29f34500ec08"
+  },
+  "id": "SzQjBDZ0dMWWVMwx",
+  "tags": []
+}

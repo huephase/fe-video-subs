@@ -1,0 +1,348 @@
+import json
+import os
+import re
+import threading
+import traceback
+from pathlib import Path
+from typing import Optional
+
+import pysubs2
+from deep_translator import GoogleTranslator
+from fastapi import FastAPI
+from pydantic import BaseModel
+from faster_whisper import WhisperModel
+
+
+app = FastAPI()
+
+MODEL_SIZE = os.getenv("WHISPER_MODEL", "base")
+DEVICE = os.getenv("WHISPER_DEVICE", "cpu")
+COMPUTE_TYPE = os.getenv("WHISPER_COMPUTE_TYPE", "int8")
+
+model = WhisperModel(
+    MODEL_SIZE,
+    device=DEVICE,
+    compute_type=COMPUTE_TYPE,
+)
+
+
+class ProcessRequest(BaseModel):
+    audio_path: str
+    english_srt_path: str
+    translated_srt_path: str
+    ass_path: str
+    job_dir: Optional[str] = None
+
+    source_language: Optional[str] = "en"
+    target_language: str = "ar"
+
+    font_name: Optional[str] = "Noto Sans Arabic"
+    font_size: Optional[int] = 12
+
+    subtitle_alignment: Optional[int] = 2
+    subtitle_margin_v: Optional[int] = 180
+    subtitle_margin_l: Optional[int] = 80
+    subtitle_margin_r: Optional[int] = 80
+    subtitle_outline: Optional[float] = 3.5
+    subtitle_shadow: Optional[float] = 1.5
+    subtitle_bold: Optional[bool] = True
+
+    # Keep false by default because FFmpeg/libass already has FriBidi/HarfBuzz.
+    # Enable only if final RTL output appears reversed or disconnected.
+    rtl_preprocess: Optional[bool] = False
+
+
+def srt_time(seconds: float) -> str:
+    ms = int(round((seconds - int(seconds)) * 1000))
+    if ms >= 1000:
+        seconds += 1
+        ms = 0
+
+    s = int(seconds) % 60
+    m = (int(seconds) // 60) % 60
+    h = int(seconds) // 3600
+    return f"{h:02}:{m:02}:{s:02},{ms:03}"
+
+
+def write_status(job_dir: str, data: dict):
+    Path(job_dir).mkdir(parents=True, exist_ok=True)
+    status_path = Path(job_dir) / "status.json"
+    with open(status_path, "w", encoding="utf-8") as f:
+        json.dump(data, f, ensure_ascii=False, indent=2)
+
+
+def read_status(job_dir: str):
+    status_path = Path(job_dir) / "status.json"
+    if not status_path.exists():
+        return {"status": "unknown"}
+    with open(status_path, "r", encoding="utf-8") as f:
+        return json.load(f)
+
+
+def transcribe_to_srt(audio_path: str, srt_path: str, source_language: str = "en"):
+    os.makedirs(os.path.dirname(srt_path), exist_ok=True)
+
+    segments, info = model.transcribe(
+        audio_path,
+        beam_size=5,
+        vad_filter=True,
+        language=source_language,
+        task="transcribe",
+    )
+
+    with open(srt_path, "w", encoding="utf-8") as srt:
+        index = 1
+        for seg in segments:
+            text = seg.text.strip()
+            if not text:
+                continue
+
+            srt.write(f"{index}\n")
+            srt.write(f"{srt_time(seg.start)} --> {srt_time(seg.end)}\n")
+            srt.write(f"{text}\n\n")
+            index += 1
+
+
+def translate_srt(input_srt: str, output_srt: str, target_language: str):
+    os.makedirs(os.path.dirname(output_srt), exist_ok=True)
+
+    with open(input_srt, "r", encoding="utf-8") as f:
+        content = f.read().strip()
+
+    if not content:
+        with open(output_srt, "w", encoding="utf-8") as f:
+            f.write("")
+        return
+
+    blocks = re.split(r"\n\s*\n", content)
+    translator = GoogleTranslator(source="auto", target=target_language)
+    translated_blocks = []
+
+    for block in blocks:
+        lines = block.splitlines()
+
+        if len(lines) < 3:
+            translated_blocks.append(block)
+            continue
+
+        index = lines[0]
+        timestamp = lines[1]
+        text = " ".join(lines[2:]).strip()
+
+        try:
+            translated_text = translator.translate(text) if text else ""
+        except Exception:
+            # Keep the original cue if translation fails so the workflow can continue.
+            translated_text = text
+
+        translated_blocks.append(f"{index}\n{timestamp}\n{translated_text}")
+
+    with open(output_srt, "w", encoding="utf-8") as f:
+        f.write("\n\n".join(translated_blocks) + "\n")
+
+
+def maybe_preprocess_rtl(text: str, rtl_preprocess: bool) -> str:
+    if not rtl_preprocess:
+        return text
+
+    # Optional dependency path. This avoids forcing arabic-reshaper/python-bidi
+    # unless the user explicitly installs them and enables rtl_preprocess.
+    try:
+        import arabic_reshaper
+        from bidi.algorithm import get_display
+
+        return get_display(arabic_reshaper.reshape(text))
+    except Exception:
+        return text
+
+
+def srt_to_ass(
+    input_srt: str,
+    output_ass: str,
+    font_name: str,
+    font_size: int,
+    target_language: str,
+    subtitle_alignment: int = 2,
+    subtitle_margin_v: int = 180,
+    subtitle_margin_l: int = 80,
+    subtitle_margin_r: int = 80,
+    subtitle_outline: float = 3.5,
+    subtitle_shadow: float = 1.5,
+    subtitle_bold: bool = True,
+    rtl_preprocess: bool = False,
+):
+    os.makedirs(os.path.dirname(output_ass), exist_ok=True)
+
+    subs = pysubs2.load(input_srt, encoding="utf-8")
+
+    style = pysubs2.SSAStyle()
+    style.fontname = font_name
+    style.fontsize = font_size
+    style.primarycolor = pysubs2.Color(255, 255, 255, 0)
+    style.outlinecolor = pysubs2.Color(0, 0, 0, 0)
+    style.backcolor = pysubs2.Color(0, 0, 0, 120)
+
+    style.bold = bool(subtitle_bold)
+    style.borderstyle = 1
+    style.outline = float(subtitle_outline)
+    style.shadow = float(subtitle_shadow)
+
+    style.alignment = int(subtitle_alignment)
+    style.marginl = int(subtitle_margin_l)
+    style.marginr = int(subtitle_margin_r)
+    style.marginv = int(subtitle_margin_v)
+
+    # Common encoding value for Unicode/UTF-8 subtitle rendering.
+    style.encoding = 1
+
+    subs.styles["Default"] = style
+
+    for line in subs:
+        line.style = "Default"
+        line.text = maybe_preprocess_rtl(line.text, bool(rtl_preprocess))
+
+    subs.save(output_ass)
+
+
+def run_process(req: ProcessRequest):
+    transcribe_to_srt(
+        req.audio_path,
+        req.english_srt_path,
+        req.source_language,
+    )
+
+    translate_srt(
+        req.english_srt_path,
+        req.translated_srt_path,
+        req.target_language,
+    )
+
+    srt_to_ass(
+        req.translated_srt_path,
+        req.ass_path,
+        req.font_name,
+        req.font_size,
+        req.target_language,
+        req.subtitle_alignment,
+        req.subtitle_margin_v,
+        req.subtitle_margin_l,
+        req.subtitle_margin_r,
+        req.subtitle_outline,
+        req.subtitle_shadow,
+        req.subtitle_bold,
+        req.rtl_preprocess,
+    )
+
+
+def run_process_job(req: ProcessRequest):
+    job_dir = req.job_dir or os.path.dirname(req.ass_path)
+
+    try:
+        write_status(job_dir, {
+            "status": "running",
+            "step": "transcribing",
+            "progress": 10,
+        })
+
+        transcribe_to_srt(
+            req.audio_path,
+            req.english_srt_path,
+            req.source_language,
+        )
+
+        write_status(job_dir, {
+            "status": "running",
+            "step": "translating",
+            "progress": 60,
+        })
+
+        translate_srt(
+            req.english_srt_path,
+            req.translated_srt_path,
+            req.target_language,
+        )
+
+        write_status(job_dir, {
+            "status": "running",
+            "step": "creating_ass",
+            "progress": 85,
+        })
+
+        srt_to_ass(
+            req.translated_srt_path,
+            req.ass_path,
+            req.font_name,
+            req.font_size,
+            req.target_language,
+            req.subtitle_alignment,
+            req.subtitle_margin_v,
+            req.subtitle_margin_l,
+            req.subtitle_margin_r,
+            req.subtitle_outline,
+            req.subtitle_shadow,
+            req.subtitle_bold,
+            req.rtl_preprocess,
+        )
+
+        write_status(job_dir, {
+            "status": "done",
+            "step": "complete",
+            "progress": 100,
+            "english_srt": req.english_srt_path,
+            "translated_srt": req.translated_srt_path,
+            "ass": req.ass_path,
+        })
+
+    except Exception as e:
+        write_status(job_dir, {
+            "status": "error",
+            "error": str(e),
+            "traceback": traceback.format_exc(),
+        })
+
+
+@app.get("/health")
+def health():
+    return {
+        "status": "ok",
+        "model": MODEL_SIZE,
+        "device": DEVICE,
+        "compute_type": COMPUTE_TYPE,
+    }
+
+
+@app.post("/process")
+def process_video_audio(req: ProcessRequest):
+    run_process(req)
+
+    return {
+        "status": "done",
+        "english_srt": req.english_srt_path,
+        "translated_srt": req.translated_srt_path,
+        "ass": req.ass_path,
+    }
+
+
+@app.post("/process_async")
+def process_video_audio_async(req: ProcessRequest):
+    job_dir = req.job_dir or os.path.dirname(req.ass_path)
+
+    write_status(job_dir, {
+        "status": "queued",
+        "step": "queued",
+        "progress": 0,
+    })
+
+    thread = threading.Thread(target=run_process_job, args=(req,), daemon=True)
+    thread.start()
+
+    return {
+        "status": "started",
+        "job_dir": job_dir,
+        "status_file": f"{job_dir}/status.json",
+    }
+
+
+@app.get("/status")
+def status(job_dir: str):
+    return read_status(job_dir)

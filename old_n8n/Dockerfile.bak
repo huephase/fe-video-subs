@@ -1,0 +1,19 @@
+# Stage 1: get apk tooling from matching Alpine version
+FROM alpine:3.22 AS alpine_apk
+
+# Stage 2: start from n8n and add apk back + install only FFmpeg
+FROM n8nio/n8n:1
+
+USER root
+
+COPY --from=alpine_apk /sbin/apk /sbin/apk
+COPY --from=alpine_apk /usr/lib/libapk.so.* /usr/lib/
+
+RUN set -eux; \
+  apk update; \
+  apk add --no-cache \
+    ffmpeg \
+    ca-certificates; \
+  ffmpeg -version
+
+USER node

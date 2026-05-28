@@ -4,18 +4,18 @@
 
 ## 1. Goal
 
-Create a standalone Dockerized application that takes in videos and extracts audio and executes speech to text with LLM and finally burns the translated subtitles to a final video with a fully managed web application.
+Create a standalone Dockerized application that replaces the old n8n-based video-to-translated-hard-subtitles workflow with a fully managed web application.
 
 The app should watch an external video folder, queue jobs, transcribe long videos, translate subtitles, generate styled ASS subtitles with strong RTL support, burn subtitles into videos, and expose a full web UI for configuration, job control, monitoring, errors, outputs, and system health.
 
-The current uploaded files show the existing n8n approach:
+The old files under the directory `old_n8n` show the previous n8n approach:
 
-- `docker-compose.yml` currently runs `postgres`, `n8n`, `whisper`, and `whisper_api` services.
-- `Dockerfile` currently extends the `n8nio/n8n:1` image and installs FFmpeg into the n8n container.
-- `Video_to_Translated_Hard_Subs_v4_FIXED(1).json` contains the n8n workflow that builds paths, extracts audio, calls the async Whisper API, waits for status files, verifies subtitles, and burns subtitles.
-- `app(1).py` contains a FastAPI helper that transcribes audio with `faster-whisper`, translates SRT cues, converts SRT to ASS, and exposes `/process`, `/process_async`, `/status`, and `/health` endpoints.
+- `old_n8n/docker-compose.yml.bak` runs `postgres`, `n8n`, `whisper`, and `whisper_api` services.
+- `old_n8n/Dockerfile.bak` extends the `n8nio/n8n:1` image and installs FFmpeg into the n8n container.
+- `old_n8n/Video_to_Translated_Hard_Subs_v4_FIXED.json.bak` contains the n8n workflow that builds paths, extracts audio, calls the async Whisper API, waits for status files, verifies subtitles, and burns subtitles.
+- `old_n8n/app.py.bak` contains a FastAPI helper that transcribes audio with `faster-whisper`, translates SRT cues, converts SRT to ASS, and exposes `/process`, `/process_async`, `/status`, and `/health` endpoints.
 
-The new app should preserve the useful behavior from these files, but remove n8n as the main orchestration layer and replace it with a more reliable standalone app architecture.
+The new app should preserve the useful behavior from these old n8n files, but remove n8n as the main orchestration layer and replace it with a more reliable standalone app architecture.
 
 ---
 
@@ -23,7 +23,7 @@ The new app should preserve the useful behavior from these files, but remove n8n
 
 ### 2.1 `/video-data` should not live inside the Git-tracked app directory
 
-Current Docker Compose mounts:
+Old Docker Compose mounted:
 
 ```yaml
 ./video-data:/video-data
@@ -37,10 +37,10 @@ The new app must mount an external host directory, for example:
 ${VIDEO_DATA_HOST_PATH}:/video-data
 ```
 
-Example `.env` value:
+Example `__main_config.json` value:
 
-```env
-VIDEO_DATA_HOST_PATH=/mnt/media/video-data
+```json
+"VIDEO_DATA_HOST_PATH":"/mnt/media/video-data"
 ```
 
 Inside that mounted path, the app should manage:
@@ -53,7 +53,7 @@ Inside that mounted path, the app should manage:
   output/         # final hard-subbed videos
   archive/        # original videos after success, optional
   failed/         # failed source files, optional
-  logs/           # optional external logs
+  logs/           # external logs
   models/         # optional model cache if desired
 ```
 
@@ -93,7 +93,7 @@ or inside the repo for development:
 
 Secrets must not be stored in this file. Secrets belong in `.env` or Docker secrets.
 
-The web UI should allow editing safe runtime settings and saving them back to `__main_config.json`. The backend should reload this file dynamically before starting each new job, and optionally watch it for changes.
+The web UI should allow editing safe runtime settings and saving them back to `__main_config.json`. The backend should reload this file dynamically before starting each new job, and watch it for changes.
 
 Recommended `__main_config.json`:
 
@@ -155,7 +155,7 @@ Recommended `__main_config.json`:
   "subtitles": {
     "format": "ass",
     "font_name": "Noto Sans Arabic",
-    "font_size": 42,
+    "font_size": 12,
     "alignment": 2,
     "margin_v": 180,
     "margin_l": 80,
