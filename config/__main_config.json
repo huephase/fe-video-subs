@@ -1,0 +1,57 @@
+{
+  "paths": {
+    "video_data_root": "/video-data",
+    "watch_dir": "/video-data/watch",
+    "processing_dir": "/video-data/processing",
+    "work_dir": "/video-data/work",
+    "output_dir": "/video-data/output",
+    "archive_dir": "/video-data/archive",
+    "failed_dir": "/video-data/failed"
+  },
+  "queue": {
+    "max_concurrent_jobs": 1
+  },
+  "whisper": {
+    "model": "medium",
+    "device": "cpu",
+    "compute_type": "int8",
+    "source_language": "en",
+    "beam_size": 5,
+    "vad_filter": true
+  },
+  "translation": {
+    "provider": "google_unofficial",
+    "source_language": "auto",
+    "target_language": "ar",
+    "rate_limit_delay_ms": 500,
+    "retry_count": 3,
+    "fallback_to_original_on_error": true
+  },
+  "subtitles": {
+    "font_name": "Noto Sans Arabic",
+    "font_size": 12,
+    "alignment": 2,
+    "margin_v": 180,
+    "margin_l": 80,
+    "margin_r": 80,
+    "outline": 3.5,
+    "shadow": 1.5,
+    "bold": true,
+    "primary_color": "&H00FFFFFF",
+    "outline_color": "&H00000000",
+    "back_color": "&H78000000",
+    "rtl_mode": "libass_native",
+    "rtl_preprocess_fallback": false
+  },
+  "burn": {
+    "encoder": "libx264",
+    "preset": "veryfast",
+    "crf": 20,
+    "audio_mode": "copy"
+  },
+  "ui": {
+    "app_name": "Video Subtitle Studio",
+    "theme": "dark"
+  }
+}
+

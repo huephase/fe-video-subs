@@ -1,0 +1,14 @@
+fastapi==0.115.12
+uvicorn[standard]==0.34.2
+pydantic==2.11.5
+sqlalchemy==2.0.41
+psycopg[binary]==3.2.9
+redis==6.1.0
+rq==2.3.3
+python-multipart==0.0.20
+faster-whisper==1.1.1
+pysubs2==1.8.0
+deep-translator==1.11.4
+arabic-reshaper==3.0.0
+python-bidi==0.6.6
+
