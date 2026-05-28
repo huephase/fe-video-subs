@@ -99,6 +99,32 @@ def job_logs(job_id: str) -> list[JobLog]:
         return list(session.scalars(select(JobLog).where(JobLog.job_id == job_id).order_by(JobLog.created_at)).all())
 
 
+def mark_interrupted_jobs() -> int:
+    interrupted_at = utcnow()
+    count = 0
+    with session_scope() as session:
+        jobs = list(session.scalars(select(Job).where(Job.status.in_(("running", "pausing")))).all())
+        for job in jobs:
+            job.status = "failed"
+            job.error_summary = "Job interrupted by application shutdown"
+            job.error_detail = (
+                "This job was marked running in the database, but the worker process was not active after startup. "
+                "Clear it to remove related working files, or start it again to retry from the beginning."
+            )
+            job.updated_at = interrupted_at
+            session.add(
+                JobLog(
+                    job_id=job.id,
+                    level="error",
+                    stage=job.stage,
+                    message="Job interrupted by application shutdown",
+                    metadata_json={},
+                )
+            )
+            count += 1
+    return count
+
+
 def set_job_paused(job_id: str, paused: bool) -> Job:
     job = get_job(job_id)
     if not job:

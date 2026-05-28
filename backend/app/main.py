@@ -10,7 +10,7 @@ from fastapi.responses import StreamingResponse
 
 from app.config import ensure_runtime_dirs, load_config, save_config
 from app.database import init_db
-from app.jobs import clear_job, create_job, enqueue_job, get_job, job_logs, list_jobs, set_job_paused
+from app.jobs import clear_job, create_job, enqueue_job, get_job, job_logs, list_jobs, mark_interrupted_jobs, set_job_paused
 from app.schemas import CreateJobRequest, JobLogOut, JobOut
 
 
@@ -29,6 +29,7 @@ app.add_middleware(
 def startup() -> None:
     init_db()
     ensure_runtime_dirs(load_config())
+    mark_interrupted_jobs()
 
 
 @app.get("/api/health")
