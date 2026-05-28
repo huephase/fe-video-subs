@@ -10,7 +10,7 @@ from fastapi.responses import StreamingResponse
 
 from app.config import ensure_runtime_dirs, load_config, save_config
 from app.database import init_db
-from app.jobs import create_job, enqueue_job, get_job, job_logs, list_jobs
+from app.jobs import clear_job, create_job, enqueue_job, get_job, job_logs, list_jobs, set_job_paused
 from app.schemas import CreateJobRequest, JobLogOut, JobOut
 
 
@@ -95,6 +95,38 @@ def start_job_endpoint(job_id: str) -> JobOut:
     return JobOut.model_validate(refreshed)
 
 
+@app.post("/api/jobs/{job_id}/pause", response_model=JobOut)
+def pause_job_endpoint(job_id: str) -> JobOut:
+    job = get_job(job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail="Job not found")
+    if job.status not in {"queued", "running"}:
+        raise HTTPException(status_code=400, detail="Only queued or running jobs can be paused")
+    return JobOut.model_validate(set_job_paused(job_id, True))
+
+
+@app.post("/api/jobs/{job_id}/resume", response_model=JobOut)
+def resume_job_endpoint(job_id: str) -> JobOut:
+    job = get_job(job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail="Job not found")
+    if job.status not in {"paused", "pausing"}:
+        raise HTTPException(status_code=400, detail="Only paused jobs can be resumed")
+    return JobOut.model_validate(set_job_paused(job_id, False))
+
+
+@app.delete("/api/jobs/{job_id}")
+def clear_job_endpoint(job_id: str) -> dict:
+    try:
+        clear_job(job_id)
+    except ValueError as exc:
+        message = str(exc)
+        if "not found" in message:
+            raise HTTPException(status_code=404, detail=message) from exc
+        raise HTTPException(status_code=400, detail=message) from exc
+    return {"status": "cleared", "job_id": job_id}
+
+
 @app.get("/api/jobs/{job_id}/logs", response_model=list[JobLogOut])
 def get_job_logs_endpoint(job_id: str) -> list[JobLogOut]:
     return [JobLogOut.model_validate(log) for log in job_logs(job_id)]
@@ -109,4 +141,3 @@ async def events_stream() -> StreamingResponse:
             await asyncio.sleep(2)
 
     return StreamingResponse(emit(), media_type="text/event-stream")
-

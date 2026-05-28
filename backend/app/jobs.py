@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import traceback
 import uuid
+import shutil
+import time
 from pathlib import Path
 
 from sqlalchemy import desc, select
@@ -9,8 +11,16 @@ from sqlalchemy import desc, select
 from app.config import ensure_runtime_dirs, load_config
 from app.database import Job, JobLog, session_scope, utcnow
 from app.media import burn_subtitles, claim_source, extract_audio, extract_duration_seconds, probe_video
-from app.queueing import job_queue
+from app.queueing import job_queue, redis_connection
 from app.subtitles import srt_to_ass, transcribe_to_srt, translate_srt
+
+
+def pause_key(job_id: str) -> str:
+    return f"job:{job_id}:paused"
+
+
+class JobCleared(RuntimeError):
+    pass
 
 
 def log_job(job_id: str, level: str, stage: str | None, message: str, metadata: dict | None = None) -> None:
@@ -89,6 +99,82 @@ def job_logs(job_id: str) -> list[JobLog]:
         return list(session.scalars(select(JobLog).where(JobLog.job_id == job_id).order_by(JobLog.created_at)).all())
 
 
+def set_job_paused(job_id: str, paused: bool) -> Job:
+    job = get_job(job_id)
+    if not job:
+        raise ValueError(f"Job {job_id} not found")
+    redis = redis_connection()
+    if paused:
+        redis.set(pause_key(job_id), "1")
+        next_status = "paused" if job.status == "queued" else "pausing"
+        update_job(job_id, status=next_status)
+        log_job(job_id, "info", job.stage, "Job paused")
+    else:
+        redis.delete(pause_key(job_id))
+        next_status = "queued" if job.stage == "queued" else "running"
+        update_job(job_id, status=next_status)
+        log_job(job_id, "info", job.stage, "Job resumed")
+    refreshed = get_job(job_id)
+    if not refreshed:
+        raise ValueError(f"Job {job_id} not found")
+    return refreshed
+
+
+def wait_if_paused(job_id: str) -> bool:
+    redis = redis_connection()
+    logged = False
+    while redis.exists(pause_key(job_id)):
+        job = get_job(job_id)
+        if not job:
+            return False
+        if not logged:
+            update_job(job_id, status="paused")
+            log_job(job_id, "info", job.stage, "Worker is paused before the next stage")
+            logged = True
+        time.sleep(2)
+    return get_job(job_id) is not None
+
+
+def clear_job(job_id: str) -> None:
+    job = get_job(job_id)
+    if not job:
+        raise ValueError(f"Job {job_id} not found")
+    if job.status in {"running", "pausing"}:
+        raise ValueError("Running jobs must reach paused status before they can be cleared")
+
+    redis_connection().delete(pause_key(job_id))
+    if job.rq_job_id:
+        try:
+            rq_job = job_queue().fetch_job(job.rq_job_id)
+            if rq_job:
+                rq_job.cancel()
+        except Exception:
+            pass
+
+    cfg = job.config_snapshot
+    root = Path(cfg["paths"]["video_data_root"]).resolve()
+    candidates = [Path(job.work_dir)]
+    if job.processing_path:
+        candidates.append(Path(job.processing_path).parent)
+    if job.output_path:
+        candidates.append(Path(job.output_path))
+
+    for path in candidates:
+        resolved = path.resolve()
+        if root not in resolved.parents and resolved != root:
+            continue
+        if resolved.is_dir():
+            shutil.rmtree(resolved, ignore_errors=True)
+        elif resolved.exists():
+            resolved.unlink()
+
+    with session_scope() as session:
+        session.query(JobLog).filter(JobLog.job_id == job_id).delete()
+        stored = session.get(Job, job_id)
+        if stored:
+            session.delete(stored)
+
+
 def process_job(job_id: str) -> None:
     job = get_job(job_id)
     if not job:
@@ -105,10 +191,14 @@ def process_job(job_id: str) -> None:
     output_path = Path(paths["output_dir"]) / output_name
 
     def stage(name: str, progress: float, message: str) -> None:
+        if not wait_if_paused(job_id):
+            raise JobCleared("Job was cleared while paused")
         update_job(job_id, status="running", stage=name, progress=progress)
         log_job(job_id, "info", name, message)
 
     try:
+        if not wait_if_paused(job_id):
+            return
         update_job(job_id, status="running", stage="claiming_file", progress=1, started_at=utcnow())
         ensure_runtime_dirs(load_config())
         source = claim_source(Path(job.source_path), Path(paths["processing_dir"]), job_id)
@@ -144,9 +234,10 @@ def process_job(job_id: str) -> None:
             error_detail=None,
         )
         log_job(job_id, "info", "completed", "Final video saved", {"output_path": str(output_path)})
+    except JobCleared:
+        return
     except Exception as exc:
         detail = traceback.format_exc()
         update_job(job_id, status="failed", stage="failed", error_summary=str(exc), error_detail=detail)
         log_job(job_id, "error", "failed", str(exc), {"traceback": detail})
         raise
-

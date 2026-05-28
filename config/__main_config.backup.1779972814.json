@@ -22,7 +22,7 @@
   "translation": {
     "provider": "google_unofficial",
     "source_language": "auto",
-    "target_language": "fa",
+    "target_language": "ar",
     "rate_limit_delay_ms": 500,
     "retry_count": 3,
     "fallback_to_original_on_error": true
@@ -54,3 +54,4 @@
     "theme": "dark"
   }
 }
+

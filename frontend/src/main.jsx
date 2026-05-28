@@ -1,6 +1,6 @@
 import React, { useEffect, useMemo, useState } from "react";
 import { createRoot } from "react-dom/client";
-import { Activity, AlertTriangle, CheckCircle2, FileVideo, ListPlus, Play, RefreshCw, Save } from "lucide-react";
+import { Activity, AlertTriangle, CheckCircle2, FileVideo, ListPlus, Pause, Play, RefreshCw, Save, Trash2 } from "lucide-react";
 import "./styles.css";
 
 const api = {
@@ -10,11 +10,14 @@ const api = {
     return res.json();
   },
   async send(path, method, body) {
-    const res = await fetch(path, {
+    const options = {
       method,
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(body),
-    });
+    };
+    if (body !== undefined) {
+      options.body = JSON.stringify(body);
+    }
+    const res = await fetch(path, options);
     if (!res.ok) throw new Error(await res.text());
     return res.json();
   },
@@ -26,6 +29,8 @@ function statusTone(status) {
     failed: "bad",
     running: "live",
     queued: "wait",
+    paused: "wait",
+    pausing: "wait",
   }[status] || "wait";
 }
 
@@ -87,6 +92,41 @@ function App() {
     }
   }
 
+  async function pauseJob(job) {
+    if (!job) return;
+    try {
+      await api.send(`/api/jobs/${job.id}/pause`, "POST", {});
+      await refresh();
+      await loadLogs(job.id);
+    } catch (err) {
+      setError(String(err.message || err));
+    }
+  }
+
+  async function resumeJob(job) {
+    if (!job) return;
+    try {
+      await api.send(`/api/jobs/${job.id}/resume`, "POST", {});
+      await refresh();
+      await loadLogs(job.id);
+    } catch (err) {
+      setError(String(err.message || err));
+    }
+  }
+
+  async function clearJob(job) {
+    if (!job) return;
+    if (!window.confirm(`Clear ${job.original_filename} and delete its working files?`)) return;
+    try {
+      await api.send(`/api/jobs/${job.id}`, "DELETE");
+      setSelectedJobId(null);
+      setLogs([]);
+      await refresh();
+    } catch (err) {
+      setError(String(err.message || err));
+    }
+  }
+
   useEffect(() => {
     refresh();
     const events = new EventSource("/api/events/stream");
@@ -105,7 +145,7 @@ function App() {
     return () => clearInterval(timer);
   }, [selectedJob?.id]);
 
-  const active = jobs.find((job) => job.status === "running");
+  const active = jobs.find((job) => ["running", "pausing"].includes(job.status));
   const completed = jobs.filter((job) => job.status === "completed").length;
   const failed = jobs.filter((job) => job.status === "failed").length;
 
@@ -191,6 +231,14 @@ function App() {
           </div>
           {selectedJob ? (
             <div className="details">
+              <div className="actions">
+                {["paused", "pausing"].includes(selectedJob.status) ? (
+                  <button title="Resume job" onClick={() => resumeJob(selectedJob)}><Play size={16} /></button>
+                ) : (
+                  <button title="Pause job" disabled={!["queued", "running"].includes(selectedJob.status)} onClick={() => pauseJob(selectedJob)}><Pause size={16} /></button>
+                )}
+                <button className="danger" title="Clear job and files" disabled={["running", "pausing"].includes(selectedJob.status)} onClick={() => clearJob(selectedJob)}><Trash2 size={16} /></button>
+              </div>
               <Field label="Source" value={selectedJob.processing_path || selectedJob.source_path} />
               <Field label="Target language" value={selectedJob.target_language} />
               <Field label="Output" value={selectedJob.output_path || "Pending"} />
@@ -250,4 +298,3 @@ function Field({ label, value }) {
 }
 
 createRoot(document.getElementById("root")).render(<App />);
-
