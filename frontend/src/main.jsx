@@ -34,6 +34,12 @@ function statusTone(status) {
   }[status] || "wait";
 }
 
+function activeTitle(appName, job) {
+  if (!job) return appName;
+  const percent = Math.round(Number(job.progress || 0));
+  return `${percent}% ${job.stage} - ${appName}`;
+}
+
 function App() {
   const [jobs, setJobs] = useState([]);
   const [files, setFiles] = useState([]);
@@ -127,6 +133,10 @@ function App() {
     }
   }
 
+  function updateConfig(section, key, value) {
+    setConfig({ ...config, [section]: { ...config[section], [key]: value } });
+  }
+
   useEffect(() => {
     refresh();
     const events = new EventSource("/api/events/stream");
@@ -148,12 +158,17 @@ function App() {
   const active = jobs.find((job) => ["running", "pausing"].includes(job.status));
   const completed = jobs.filter((job) => job.status === "completed").length;
   const failed = jobs.filter((job) => job.status === "failed").length;
+  const appName = config?.ui?.app_name || "Video Subtitle Studio";
+
+  useEffect(() => {
+    document.title = activeTitle(appName, active);
+  }, [appName, active?.id, active?.progress, active?.stage]);
 
   return (
     <main>
       <header className="topbar">
         <div>
-          <h1>{config?.ui?.app_name || "Video Subtitle Studio"}</h1>
+          <h1>{appName}</h1>
           <p>{active ? `${active.original_filename} is ${active.stage}` : "Queue is ready"}</p>
         </div>
         <button className="iconButton" title="Refresh" onClick={refresh}>
@@ -272,11 +287,75 @@ function App() {
           </div>
           {config && (
             <div className="settings">
-              <label>Target language<input value={config.translation.target_language} onChange={(e) => setConfig({ ...config, translation: { ...config.translation, target_language: e.target.value } })} /></label>
-              <label>Whisper model<input value={config.whisper.model} onChange={(e) => setConfig({ ...config, whisper: { ...config.whisper, model: e.target.value } })} /></label>
-              <label>Font<input value={config.subtitles.font_name} onChange={(e) => setConfig({ ...config, subtitles: { ...config.subtitles, font_name: e.target.value } })} /></label>
-              <label>Font size<input type="number" value={config.subtitles.font_size} onChange={(e) => setConfig({ ...config, subtitles: { ...config.subtitles, font_size: Number(e.target.value) } })} /></label>
-              <label>CRF<input type="number" value={config.burn.crf} onChange={(e) => setConfig({ ...config, burn: { ...config.burn, crf: Number(e.target.value) } })} /></label>
+              <Setting label="Target language" tip="Subtitle translation target, such as ar, fa, ur, he, or es.">
+                <input value={config.translation.target_language} onChange={(e) => updateConfig("translation", "target_language", e.target.value)} />
+              </Setting>
+              <Setting label="Whisper model" tip="Larger models are usually more accurate but slower and heavier.">
+                <input value={config.whisper.model} onChange={(e) => updateConfig("whisper", "model", e.target.value)} />
+              </Setting>
+              <Setting label="Font" tip="Use a font installed in the backend image. Noto fonts are included.">
+                <input value={config.subtitles.font_name} onChange={(e) => updateConfig("subtitles", "font_name", e.target.value)} />
+              </Setting>
+              <div className="settingsGrid">
+                <Setting label="Font size" tip="Subtitle text size in ASS points.">
+                  <input type="number" min="6" max="96" value={config.subtitles.font_size} onChange={(e) => updateConfig("subtitles", "font_size", Number(e.target.value))} />
+                </Setting>
+                <Setting label="Alignment" tip="ASS keypad alignment. 2 is bottom center, 8 is top center.">
+                  <select value={config.subtitles.alignment} onChange={(e) => updateConfig("subtitles", "alignment", Number(e.target.value))}>
+                    <option value="1">Bottom left</option>
+                    <option value="2">Bottom center</option>
+                    <option value="3">Bottom right</option>
+                    <option value="5">Middle center</option>
+                    <option value="7">Top left</option>
+                    <option value="8">Top center</option>
+                    <option value="9">Top right</option>
+                  </select>
+                </Setting>
+                <Setting label="Bottom margin" tip="Vertical distance from the bottom when using bottom alignment.">
+                  <input type="number" min="0" value={config.subtitles.margin_v} onChange={(e) => updateConfig("subtitles", "margin_v", Number(e.target.value))} />
+                </Setting>
+                <Setting label="Left margin" tip="Horizontal padding from the left edge.">
+                  <input type="number" min="0" value={config.subtitles.margin_l} onChange={(e) => updateConfig("subtitles", "margin_l", Number(e.target.value))} />
+                </Setting>
+                <Setting label="Right margin" tip="Horizontal padding from the right edge.">
+                  <input type="number" min="0" value={config.subtitles.margin_r} onChange={(e) => updateConfig("subtitles", "margin_r", Number(e.target.value))} />
+                </Setting>
+                <Setting label="Outline" tip="Black stroke thickness around text. Higher improves contrast.">
+                  <input type="number" min="0" step="0.1" value={config.subtitles.outline} onChange={(e) => updateConfig("subtitles", "outline", Number(e.target.value))} />
+                </Setting>
+                <Setting label="Shadow" tip="Drop shadow offset. Keep subtle for clean subtitles.">
+                  <input type="number" min="0" step="0.1" value={config.subtitles.shadow} onChange={(e) => updateConfig("subtitles", "shadow", Number(e.target.value))} />
+                </Setting>
+                <Setting label="Video CRF" tip="Lower is higher quality and larger output. 18-23 is common.">
+                  <input type="number" min="0" max="51" value={config.burn.crf} onChange={(e) => updateConfig("burn", "crf", Number(e.target.value))} />
+                </Setting>
+              </div>
+              <div className="settingsGrid">
+                <Setting label="Text color" tip="ASS color format: &HAABBGGRR. White is &H00FFFFFF.">
+                  <input value={config.subtitles.primary_color} onChange={(e) => updateConfig("subtitles", "primary_color", e.target.value)} />
+                </Setting>
+                <Setting label="Outline color" tip="ASS color format. Black is &H00000000.">
+                  <input value={config.subtitles.outline_color} onChange={(e) => updateConfig("subtitles", "outline_color", e.target.value)} />
+                </Setting>
+                <Setting label="Back color" tip="ASS color format for subtitle box/background alpha.">
+                  <input value={config.subtitles.back_color} onChange={(e) => updateConfig("subtitles", "back_color", e.target.value)} />
+                </Setting>
+                <Setting label="RTL mode" tip="Use libass native first. Try preprocess only if letters render reversed or disconnected.">
+                  <select value={config.subtitles.rtl_mode} onChange={(e) => updateConfig("subtitles", "rtl_mode", e.target.value)}>
+                    <option value="libass_native">libass native</option>
+                    <option value="preprocess_bidi">preprocess bidi</option>
+                    <option value="auto">auto</option>
+                  </select>
+                </Setting>
+              </div>
+              <label className="check" title="Makes subtitle text bold for better readability.">
+                <input type="checkbox" checked={config.subtitles.bold} onChange={(e) => updateConfig("subtitles", "bold", e.target.checked)} />
+                Bold subtitles
+              </label>
+              <label className="check" title="Applies Arabic shaping/bidi preprocessing as a fallback. Use only if native libass rendering looks wrong.">
+                <input type="checkbox" checked={config.subtitles.rtl_preprocess_fallback} onChange={(e) => updateConfig("subtitles", "rtl_preprocess_fallback", e.target.checked)} />
+                RTL preprocess fallback
+              </label>
             </div>
           )}
         </div>
@@ -295,6 +374,15 @@ function Progress({ value }) {
 
 function Field({ label, value }) {
   return <div className="field"><span>{label}</span><p>{value}</p></div>;
+}
+
+function Setting({ label, tip, children }) {
+  return (
+    <label title={tip}>
+      <span className="settingLabel">{label}<small>?</small></span>
+      {children}
+    </label>
+  );
 }
 
 createRoot(document.getElementById("root")).render(<App />);
