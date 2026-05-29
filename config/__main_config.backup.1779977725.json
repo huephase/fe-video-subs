@@ -12,7 +12,7 @@
     "max_concurrent_jobs": 1
   },
   "whisper": {
-    "model": "large-v3",
+    "model": "medium",
     "device": "cpu",
     "compute_type": "int8",
     "source_language": "en",
@@ -29,9 +29,9 @@
   },
   "subtitles": {
     "font_name": "Noto Sans Arabic",
-    "font_size": 14,
+    "font_size": 12,
     "alignment": 2,
-    "margin_v": 30,
+    "margin_v": 40,
     "margin_l": 80,
     "margin_r": 80,
     "outline": 3.5,
