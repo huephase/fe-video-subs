@@ -337,7 +337,7 @@ def add_branding_event(subs: pysubs2.SSAFile, base_style: pysubs2.SSAStyle, sub_
 
     duration_ms = max(1000, int(float(sub_cfg.get("branding_duration_seconds", 20.0)) * 1000))
     branding_style = copy.copy(base_style)
-    branding_style.fontsize = max(8, int(round(float(base_style.fontsize) * 0.85)))
+    branding_style.fontsize = 40
     branding_style.alignment = 8
     branding_style.marginv = max(24, int(int(sub_cfg.get("margin_v", 180)) * 0.25))
 
