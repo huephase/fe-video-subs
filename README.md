@@ -8,6 +8,8 @@ This repository now contains the first milestone from `docs/MAIN_PLAN.MD`:
 - External video mount via `${VIDEO_DATA_HOST_PATH}:/video-data`
 - Runtime settings loaded from `/config/__main_config.json`
 - Manual job creation from the UI using files in `/video-data/watch`
+- Optional per-job custom subtitle upload (`.srt`, `.ass`, `.vtt`) to skip audio extraction and speech-to-text
+- Configurable ASS branding note, shown by default for the first 20 seconds
 - One-at-a-time Redis/RQ worker processing
 - FFmpeg audio extraction
 - Faster Whisper transcription
@@ -46,7 +48,7 @@ This repository now contains the first milestone from `docs/MAIN_PLAN.MD`:
    http://localhost:3000
    ```
 
-Drop a short test video into `/video-data/watch`, then enqueue it from the Watch Folder panel.
+Drop a short test video into `/video-data/watch`, then enqueue it from the Watch Folder panel. To use existing subtitles instead of speech-to-text, click the subtitle-file button beside the video before enqueueing and select a `.srt`, `.ass`, or `.vtt` file.
 
 ## Notes
 

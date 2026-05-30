@@ -56,6 +56,16 @@ class Job(Base):
     completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow)
 
+    @property
+    def uses_custom_subtitle(self) -> bool:
+        return bool(self.config_snapshot.get("custom_subtitle", {}).get("path"))
+
+    @property
+    def custom_subtitle_filename(self) -> str | None:
+        custom_subtitle = self.config_snapshot.get("custom_subtitle", {})
+        filename = custom_subtitle.get("original_filename") or custom_subtitle.get("filename")
+        return str(filename) if filename else None
+
 
 class JobLog(Base):
     __tablename__ = "job_logs"
@@ -84,4 +94,3 @@ def session_scope() -> Iterator[Session]:
         raise
     finally:
         session.close()
-

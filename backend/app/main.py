@@ -2,16 +2,18 @@ from __future__ import annotations
 
 import asyncio
 import json
+import shutil
 from pathlib import Path
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 
 from app.config import ensure_runtime_dirs, load_config, save_config
 from app.database import init_db
-from app.jobs import clear_job, create_job, enqueue_job, get_job, job_logs, list_jobs, mark_interrupted_jobs, set_job_paused
+from app.jobs import attach_custom_subtitle, clear_job, create_job, enqueue_job, get_job, job_logs, list_jobs, mark_interrupted_jobs, set_job_paused
 from app.schemas import CreateJobRequest, JobLogOut, JobOut
+from app.subtitles import SUPPORTED_SUBTITLE_SUFFIXES
 
 
 app = FastAPI(title="Video Subtitle Studio")
@@ -65,9 +67,46 @@ def watch_files() -> list[dict]:
 @app.post("/api/jobs", response_model=JobOut)
 def create_job_endpoint(req: CreateJobRequest) -> JobOut:
     try:
-        job = create_job(req.source_path, req.source_language, req.target_language, req.auto_start)
+        job = create_job(req.source_path, req.source_language, req.target_language, req.auto_start, req.custom_subtitle_path)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return JobOut.model_validate(job)
+
+
+@app.post("/api/jobs/upload", response_model=JobOut)
+def create_job_upload_endpoint(
+    source_path: str = Form(...),
+    source_language: str | None = Form(None),
+    target_language: str | None = Form(None),
+    auto_start: bool = Form(True),
+    subtitle_file: UploadFile | None = File(None),
+) -> JobOut:
+    try:
+        if not subtitle_file or not subtitle_file.filename:
+            job = create_job(source_path, source_language, target_language, auto_start)
+            return JobOut.model_validate(job)
+
+        suffix = Path(subtitle_file.filename).suffix.lower()
+        if suffix not in SUPPORTED_SUBTITLE_SUFFIXES:
+            allowed = ", ".join(sorted(SUPPORTED_SUBTITLE_SUFFIXES))
+            raise ValueError(f"Custom subtitle file must use one of these formats: {allowed}")
+
+        job = create_job(source_path, source_language, target_language, False)
+        destination_dir = Path(job.work_dir) / "custom_subtitles"
+        destination_dir.mkdir(parents=True, exist_ok=True)
+        destination = destination_dir / f"source{suffix}"
+        with destination.open("wb") as output:
+            shutil.copyfileobj(subtitle_file.file, output)
+
+        job = attach_custom_subtitle(job.id, str(destination), subtitle_file.filename)
+        if auto_start:
+            enqueue_job(job.id)
+            job = get_job(job.id) or job
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    finally:
+        if subtitle_file:
+            subtitle_file.file.close()
     return JobOut.model_validate(job)
 
 

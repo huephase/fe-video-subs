@@ -158,7 +158,7 @@ button.danger {
 
 .fileRow {
   display: grid;
-  grid-template-columns: 22px minmax(0, 1fr) 40px;
+  grid-template-columns: 22px minmax(0, 1fr) 40px 40px;
   gap: 10px;
   align-items: center;
   padding: 10px;
@@ -176,6 +176,38 @@ tr.selected {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.subtitleAttach {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 36px;
+  height: 34px;
+  border: 1px solid #344149;
+  border-radius: 6px;
+  color: #edf2f4;
+  background: #20282d;
+  cursor: pointer;
+}
+
+.subtitleAttach:hover,
+.subtitleAttach.active {
+  background: #2b363c;
+}
+
+.subtitleAttach.active {
+  border-color: #55b3c8;
+  color: #d7f5ff;
+}
+
+.subtitleAttach input {
+  display: none;
+}
+
+.subtitleName {
+  grid-column: 2 / -1;
+  color: #d7f5ff;
 }
 
 table {

@@ -72,6 +72,9 @@ class SubtitleConfig(BaseModel):
     min_cue_duration_seconds: float = 1.0
     min_gap_ms: int = 80
     split_long_cues: bool = True
+    branding_enabled: bool = True
+    branding_text: str = "Subtitles by Video Subtitle Studio"
+    branding_duration_seconds: float = 20.0
 
 
 class BurnConfig(BaseModel):

@@ -13,6 +13,17 @@ from faster_whisper import WhisperModel
 
 
 _model_cache: dict[tuple[str, str, str], WhisperModel] = {}
+SUPPORTED_SUBTITLE_SUFFIXES = {".srt", ".ass", ".vtt"}
+
+
+def validate_subtitle_path(path: Path) -> Path:
+    suffix = path.suffix.lower()
+    if suffix not in SUPPORTED_SUBTITLE_SUFFIXES:
+        allowed = ", ".join(sorted(SUPPORTED_SUBTITLE_SUFFIXES))
+        raise ValueError(f"Custom subtitle file must use one of these formats: {allowed}")
+    if not path.exists() or not path.is_file():
+        raise ValueError("Custom subtitle file must point to an existing file")
+    return path
 
 
 def srt_time(seconds: float) -> str:
@@ -120,6 +131,19 @@ def transcribe_to_srt(audio_path: Path, srt_path: Path, cfg: dict) -> None:
                 srt.write(f"{index}\n{srt_time(start)} --> {srt_time(end)}\n{text}\n\n")
                 previous_end = end
                 index += 1
+
+
+def normalize_custom_subtitle_to_srt(input_path: Path, output_srt: Path) -> None:
+    validate_subtitle_path(input_path)
+    output_srt.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        subs = pysubs2.load(str(input_path), encoding="utf-8")
+    except Exception as exc:
+        raise ValueError(f"Custom subtitle file could not be parsed: {exc}") from exc
+    if not list(subs):
+        raise ValueError("Custom subtitle file does not contain any subtitle cues")
+    subs.sort()
+    subs.save(str(output_srt), encoding="utf-8", format_="srt")
 
 
 def translate_srt(input_srt: Path, output_srt: Path, cfg: dict) -> None:
@@ -304,6 +328,34 @@ def ass_color(value: str) -> pysubs2.Color:
     return pysubs2.Color(r, g, b, a)
 
 
+def add_branding_event(subs: pysubs2.SSAFile, base_style: pysubs2.SSAStyle, sub_cfg: dict) -> None:
+    if not bool(sub_cfg.get("branding_enabled", True)):
+        return
+    branding_text = str(sub_cfg.get("branding_text", "")).strip()
+    if not branding_text:
+        return
+
+    duration_ms = max(1000, int(float(sub_cfg.get("branding_duration_seconds", 20.0)) * 1000))
+    branding_style = copy.copy(base_style)
+    branding_style.fontsize = max(8, int(round(float(base_style.fontsize) * 0.85)))
+    branding_style.alignment = 8
+    branding_style.marginv = max(24, int(int(sub_cfg.get("margin_v", 180)) * 0.25))
+
+    subs.styles["Branding"] = branding_style
+    subs.events.insert(
+        0,
+        pysubs2.SSAEvent(
+            start=0,
+            end=duration_ms,
+            text=maybe_preprocess_rtl(
+                branding_text,
+                sub_cfg.get("rtl_mode") == "preprocess_bidi" or bool(sub_cfg.get("rtl_preprocess_fallback", False)),
+            ),
+            style="Branding",
+        ),
+    )
+
+
 def srt_to_ass(input_srt: Path, output_ass: Path, cfg: dict) -> None:
     output_ass.parent.mkdir(parents=True, exist_ok=True)
     sub_cfg = cfg["subtitles"]
@@ -330,4 +382,5 @@ def srt_to_ass(input_srt: Path, output_ass: Path, cfg: dict) -> None:
     for line in subs:
         line.style = "Default"
         line.text = maybe_preprocess_rtl(line.text, rtl_preprocess)
+    add_branding_event(subs, style, sub_cfg)
     subs.save(str(output_ass))

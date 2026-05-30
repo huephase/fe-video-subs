@@ -12,7 +12,7 @@ from app.config import ensure_runtime_dirs, load_config
 from app.database import Job, JobLog, session_scope, utcnow
 from app.media import burn_subtitles, claim_source, extract_audio, extract_duration_seconds, probe_video
 from app.queueing import job_queue, redis_connection
-from app.subtitles import clean_subtitle_quality, srt_to_ass, transcribe_to_srt, translate_srt
+from app.subtitles import clean_subtitle_quality, normalize_custom_subtitle_to_srt, srt_to_ass, transcribe_to_srt, translate_srt, validate_subtitle_path
 
 
 def pause_key(job_id: str) -> str:
@@ -48,7 +48,50 @@ def get_job(job_id: str) -> Job | None:
         return session.get(Job, job_id)
 
 
-def create_job(source_path: str, source_language: str | None, target_language: str | None, auto_start: bool) -> Job:
+def custom_subtitle_snapshot(path: Path, original_filename: str | None = None) -> dict:
+    subtitle_path = validate_subtitle_path(path.resolve())
+    return {
+        "path": str(subtitle_path),
+        "filename": subtitle_path.name,
+        "original_filename": original_filename or subtitle_path.name,
+        "format": subtitle_path.suffix.lower().lstrip("."),
+    }
+
+
+def attach_custom_subtitle(job_id: str, subtitle_path: str, original_filename: str | None = None) -> Job:
+    job = get_job(job_id)
+    if not job:
+        raise ValueError(f"Job {job_id} not found")
+    root = Path(job.config_snapshot["paths"]["video_data_root"]).resolve()
+    work_dir = Path(job.work_dir).resolve()
+    resolved = Path(subtitle_path).resolve()
+    in_video_root = root in resolved.parents or resolved == root
+    in_job_work_dir = work_dir in resolved.parents or resolved == work_dir
+    if not in_video_root and not in_job_work_dir:
+        raise ValueError("Custom subtitle file must be inside configured video_data_root or the job work directory")
+    snapshot = dict(job.config_snapshot)
+    snapshot["custom_subtitle"] = custom_subtitle_snapshot(resolved, original_filename)
+    update_job(job_id, config_snapshot=snapshot)
+    log_job(
+        job_id,
+        "info",
+        "queued",
+        "Custom subtitle file attached; audio extraction and speech-to-text will be skipped",
+        {"custom_subtitle": snapshot["custom_subtitle"]},
+    )
+    refreshed = get_job(job_id)
+    if not refreshed:
+        raise ValueError(f"Job {job_id} not found")
+    return refreshed
+
+
+def create_job(
+    source_path: str,
+    source_language: str | None,
+    target_language: str | None,
+    auto_start: bool,
+    custom_subtitle_path: str | None = None,
+) -> Job:
     cfg = load_config()
     ensure_runtime_dirs(cfg)
     source = Path(source_path)
@@ -65,6 +108,11 @@ def create_job(source_path: str, source_language: str | None, target_language: s
         snapshot["whisper"]["source_language"] = source_language
     if target_language:
         snapshot["translation"]["target_language"] = target_language
+    if custom_subtitle_path:
+        subtitle_path = Path(custom_subtitle_path).resolve()
+        if root not in subtitle_path.parents and subtitle_path != root:
+            raise ValueError("custom_subtitle_path must be inside configured video_data_root")
+        snapshot["custom_subtitle"] = custom_subtitle_snapshot(subtitle_path)
 
     job = Job(
         id=job_id,
@@ -82,6 +130,8 @@ def create_job(source_path: str, source_language: str | None, target_language: s
     with session_scope() as session:
         session.add(job)
     log_job(job_id, "info", "queued", "Job created")
+    if custom_subtitle_path:
+        log_job(job_id, "info", "queued", "Custom subtitle file attached; audio extraction and speech-to-text will be skipped")
     if auto_start:
         enqueue_job(job_id)
     return get_job(job_id) or job
@@ -235,11 +285,17 @@ def process_job(job_id: str) -> None:
         probe = probe_video(source, work_dir / "probe.json", logs_dir / "ffprobe.log")
         update_job(job_id, duration_seconds=extract_duration_seconds(probe))
 
-        stage("extracting_audio", 18, "Extracting normalized mono 16 kHz audio")
-        extract_audio(source, audio_path, logs_dir / "ffmpeg_extract.log", cfg)
+        custom_subtitle = cfg.get("custom_subtitle") or {}
+        if custom_subtitle.get("path"):
+            original_filename = custom_subtitle.get("original_filename") or custom_subtitle.get("filename") or "custom subtitle"
+            stage("using_custom_subtitles", 45, f"Using custom subtitle file {original_filename}; skipping speech-to-text")
+            normalize_custom_subtitle_to_srt(Path(custom_subtitle["path"]), source_srt)
+        else:
+            stage("extracting_audio", 18, "Extracting normalized mono 16 kHz audio")
+            extract_audio(source, audio_path, logs_dir / "ffmpeg_extract.log", cfg)
 
-        stage("transcribing", 45, "Transcribing audio with Faster Whisper")
-        transcribe_to_srt(audio_path, source_srt, cfg)
+            stage("transcribing", 45, "Transcribing audio with Faster Whisper")
+            transcribe_to_srt(audio_path, source_srt, cfg)
 
         stage("translating", 70, "Translating subtitle cues")
         translate_srt(source_srt, translated_srt, cfg)

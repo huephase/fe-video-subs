@@ -9,6 +9,7 @@ class CreateJobRequest(BaseModel):
     source_path: str
     source_language: str | None = None
     target_language: str | None = None
+    custom_subtitle_path: str | None = None
     auto_start: bool = True
 
 
@@ -26,6 +27,8 @@ class JobOut(BaseModel):
     file_size_bytes: int | None
     target_language: str
     source_language: str | None
+    uses_custom_subtitle: bool
+    custom_subtitle_filename: str | None
     error_summary: str | None
     error_detail: str | None
     created_at: datetime
@@ -48,4 +51,3 @@ class JobLogOut(BaseModel):
 
     class Config:
         from_attributes = True
-
