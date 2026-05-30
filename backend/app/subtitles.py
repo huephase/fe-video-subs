@@ -1,7 +1,10 @@
 from __future__ import annotations
 
+import copy
 import re
+import tempfile
 import time
+import wave
 from pathlib import Path
 
 import pysubs2
@@ -31,22 +34,91 @@ def whisper_model(cfg: dict) -> WhisperModel:
     return _model_cache[key]
 
 
+def whisper_language(value: str | None) -> str | None:
+    if value is None:
+        return None
+    value = str(value).strip()
+    if not value or value.lower() in {"auto", "none", "null"}:
+        return None
+    return value
+
+
+def transcribe_options(cfg: dict) -> dict:
+    whisper = cfg["whisper"]
+    return {
+        "beam_size": int(whisper["beam_size"]),
+        "vad_filter": bool(whisper.get("vad_filter", True)),
+        "language": whisper_language(whisper.get("source_language")),
+        "task": "transcribe",
+        "condition_on_previous_text": bool(whisper.get("condition_on_previous_text", False)),
+        "no_speech_threshold": float(whisper.get("no_speech_threshold", 0.8)),
+        "temperature": float(whisper.get("temperature", 0.0)),
+    }
+
+
+def write_wav_chunk(reader: wave.Wave_read, chunk_path: Path, start_frame: int, frame_count: int) -> None:
+    reader.setpos(start_frame)
+    frames = reader.readframes(frame_count)
+    with wave.open(str(chunk_path), "wb") as writer:
+        writer.setnchannels(reader.getnchannels())
+        writer.setsampwidth(reader.getsampwidth())
+        writer.setframerate(reader.getframerate())
+        writer.writeframes(frames)
+
+
+def transcribe_audio_segments(audio_path: Path, cfg: dict):
+    whisper = cfg["whisper"]
+    if not bool(whisper.get("chunking_enabled", True)):
+        segments, _ = whisper_model(cfg).transcribe(str(audio_path), **transcribe_options(cfg))
+        for seg in segments:
+            yield seg.start, seg.end, seg.text
+        return
+
+    chunk_seconds = max(60, int(whisper.get("chunk_minutes", 20)) * 60)
+    overlap_seconds = max(0, int(whisper.get("chunk_overlap_seconds", 2)))
+    if overlap_seconds >= chunk_seconds:
+        overlap_seconds = max(0, chunk_seconds - 1)
+
+    with wave.open(str(audio_path), "rb") as reader:
+        frame_rate = reader.getframerate()
+        total_frames = reader.getnframes()
+        chunk_frames = chunk_seconds * frame_rate
+        overlap_frames = overlap_seconds * frame_rate
+        step_frames = max(1, chunk_frames - overlap_frames)
+
+        with tempfile.TemporaryDirectory(prefix="subtitle-chunks-") as tmp:
+            tmp_dir = Path(tmp)
+            chunk_index = 0
+            start_frame = 0
+            while start_frame < total_frames:
+                frame_count = min(chunk_frames, total_frames - start_frame)
+                chunk_path = tmp_dir / f"chunk_{chunk_index:04}.wav"
+                write_wav_chunk(reader, chunk_path, start_frame, frame_count)
+
+                offset_seconds = start_frame / frame_rate
+                keep_from = 0.0 if chunk_index == 0 else overlap_seconds
+                segments, _ = whisper_model(cfg).transcribe(str(chunk_path), **transcribe_options(cfg))
+                for seg in segments:
+                    if seg.end <= keep_from:
+                        continue
+                    yield offset_seconds + max(seg.start, keep_from), offset_seconds + seg.end, seg.text
+
+                chunk_index += 1
+                start_frame += step_frames
+
+
 def transcribe_to_srt(audio_path: Path, srt_path: Path, cfg: dict) -> None:
     srt_path.parent.mkdir(parents=True, exist_ok=True)
-    whisper = cfg["whisper"]
-    segments, _ = whisper_model(cfg).transcribe(
-        str(audio_path),
-        beam_size=whisper["beam_size"],
-        vad_filter=whisper["vad_filter"],
-        language=whisper.get("source_language"),
-        task="transcribe",
-    )
     with srt_path.open("w", encoding="utf-8") as srt:
         index = 1
-        for seg in segments:
-            text = seg.text.strip()
+        previous_end = 0.0
+        for start, end, text in transcribe_audio_segments(audio_path, cfg):
+            text = text.strip()
             if text:
-                srt.write(f"{index}\n{srt_time(seg.start)} --> {srt_time(seg.end)}\n{text}\n\n")
+                start = max(start, previous_end)
+                end = max(end, start + 0.25)
+                srt.write(f"{index}\n{srt_time(start)} --> {srt_time(end)}\n{text}\n\n")
+                previous_end = end
                 index += 1
 
 
@@ -82,6 +154,134 @@ def translate_srt(input_srt: Path, output_srt: Path, cfg: dict) -> None:
         time.sleep(max(translation["rate_limit_delay_ms"], 0) / 1000)
 
     output_srt.write_text("\n\n".join(translated) + "\n", encoding="utf-8")
+
+
+def normalize_subtitle_text(text: str) -> str:
+    text = re.sub(r"[ \t\r\n]+", " ", text).strip()
+    text = re.sub(r"\s+([،؛؟,.!?;:])", r"\1", text)
+    text = re.sub(r"([،؛؟,.!?;:])(?=\S)", r"\1 ", text)
+    return text.strip()
+
+
+def split_long_token(token: str, max_chars: int) -> list[str]:
+    if len(token) <= max_chars:
+        return [token]
+    return [token[index : index + max_chars] for index in range(0, len(token), max_chars)]
+
+
+def wrapped_lines(text: str, max_chars_per_line: int) -> list[str]:
+    words: list[str] = []
+    for word in text.split():
+        words.extend(split_long_token(word, max_chars_per_line))
+
+    lines: list[str] = []
+    current: list[str] = []
+    current_len = 0
+
+    for word in words:
+        next_len = len(word) if not current else current_len + 1 + len(word)
+        if current and next_len > max_chars_per_line:
+            lines.append(" ".join(current))
+            current = [word]
+            current_len = len(word)
+        else:
+            current.append(word)
+            current_len = next_len
+
+    if current:
+        lines.append(" ".join(current))
+    return lines
+
+
+def split_text_for_cues(text: str, max_chars_per_line: int, max_lines: int) -> list[str]:
+    words: list[str] = []
+    for word in text.split():
+        words.extend(split_long_token(word, max_chars_per_line))
+
+    chunks: list[str] = []
+    current: list[str] = []
+    max_chars_per_cue = max_chars_per_line * max_lines
+
+    for word in words:
+        candidate = " ".join([*current, word])
+        if current and (len(candidate) > max_chars_per_cue or len(wrapped_lines(candidate, max_chars_per_line)) > max_lines):
+            chunks.append(" ".join(current))
+            current = [word]
+        else:
+            current.append(word)
+
+    if current:
+        chunks.append(" ".join(current))
+    return chunks or [text]
+
+
+def wrap_subtitle_text(text: str, max_chars_per_line: int, max_lines: int) -> str:
+    lines = wrapped_lines(text, max_chars_per_line)
+    if len(lines) <= max_lines:
+        return "\n".join(lines)
+
+    return "\n".join(lines[: max_lines - 1] + [" ".join(lines[max_lines - 1 :])])
+
+
+def clean_subtitle_quality(input_srt: Path, output_srt: Path, cfg: dict) -> None:
+    output_srt.parent.mkdir(parents=True, exist_ok=True)
+    sub_cfg = cfg["subtitles"]
+    if not sub_cfg.get("quality_enabled", True):
+        output_srt.write_text(input_srt.read_text(encoding="utf-8"), encoding="utf-8")
+        return
+
+    subs = pysubs2.load(str(input_srt), encoding="utf-8")
+    max_chars_per_line = max(12, int(sub_cfg.get("max_chars_per_line", 38)))
+    max_lines = max(1, int(sub_cfg.get("max_lines", 2)))
+    max_chars_per_cue = max_chars_per_line * max_lines
+    max_duration_ms = max(500, int(float(sub_cfg.get("max_cue_duration_seconds", 6.0)) * 1000))
+    min_duration_ms = max(250, int(float(sub_cfg.get("min_cue_duration_seconds", 1.0)) * 1000))
+    min_gap_ms = max(0, int(sub_cfg.get("min_gap_ms", 80)))
+    split_long_cues = bool(sub_cfg.get("split_long_cues", True))
+
+    cleaned = pysubs2.SSAFile()
+    cleaned.info.update(subs.info)
+    cleaned.styles.update(subs.styles)
+
+    source_events = list(subs)
+    for index, line in enumerate(source_events):
+        text = normalize_subtitle_text(line.plaintext)
+        if not text:
+            continue
+
+        chunks = [text]
+        if split_long_cues and (len(text) > max_chars_per_cue or len(wrapped_lines(text, max_chars_per_line)) > max_lines):
+            chunks = split_text_for_cues(text, max_chars_per_line, max_lines)
+
+        end_limit = line.end
+        if index + 1 < len(source_events):
+            end_limit = min(end_limit, source_events[index + 1].start - min_gap_ms)
+        original_duration = max(0, end_limit - line.start)
+        gaps_total = min_gap_ms * max(0, len(chunks) - 1)
+        usable_duration = max(0, original_duration - gaps_total)
+        chunk_duration = max(min_duration_ms, min(max_duration_ms, usable_duration // len(chunks) if chunks else usable_duration))
+        cursor = line.start
+
+        for chunk in chunks:
+            cue = copy.copy(line)
+            cue.start = cursor
+            cue.end = cursor + chunk_duration
+            cue.plaintext = wrap_subtitle_text(chunk, max_chars_per_line, max_lines)
+            cleaned.append(cue)
+            cursor = cue.end + min_gap_ms
+
+    cleaned.sort()
+    for index, line in enumerate(cleaned):
+        if line.end <= line.start:
+            line.end = line.start + min_duration_ms
+        line.end = min(line.end, line.start + max_duration_ms)
+        if index + 1 < len(cleaned):
+            next_line = cleaned[index + 1]
+            if line.end + min_gap_ms > next_line.start:
+                line.end = max(line.start + min(250, min_duration_ms), next_line.start - min_gap_ms)
+
+    cleaned.remove_miscellaneous_events()
+    cleaned.save(str(output_srt))
 
 
 def maybe_preprocess_rtl(text: str, enabled: bool) -> str:
@@ -131,4 +331,3 @@ def srt_to_ass(input_srt: Path, output_ass: Path, cfg: dict) -> None:
         line.style = "Default"
         line.text = maybe_preprocess_rtl(line.text, rtl_preprocess)
     subs.save(str(output_ass))
-

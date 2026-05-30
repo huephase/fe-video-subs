@@ -12,7 +12,7 @@ from app.config import ensure_runtime_dirs, load_config
 from app.database import Job, JobLog, session_scope, utcnow
 from app.media import burn_subtitles, claim_source, extract_audio, extract_duration_seconds, probe_video
 from app.queueing import job_queue, redis_connection
-from app.subtitles import srt_to_ass, transcribe_to_srt, translate_srt
+from app.subtitles import clean_subtitle_quality, srt_to_ass, transcribe_to_srt, translate_srt
 
 
 def pause_key(job_id: str) -> str:
@@ -212,6 +212,7 @@ def process_job(job_id: str) -> None:
     audio_path = work_dir / "audio" / "source.wav"
     source_srt = work_dir / "transcript" / "source.srt"
     translated_srt = work_dir / "translation" / f"translated.{cfg['translation']['target_language']}.srt"
+    cleaned_srt = work_dir / "translation" / f"cleaned.{cfg['translation']['target_language']}.srt"
     ass_path = work_dir / "subtitles" / "final.ass"
     output_name = f"{Path(job.original_filename).stem}_{cfg['translation']['target_language']}_{job_id[:8]}_hardsub.mp4"
     output_path = Path(paths["output_dir"]) / output_name
@@ -234,8 +235,8 @@ def process_job(job_id: str) -> None:
         probe = probe_video(source, work_dir / "probe.json", logs_dir / "ffprobe.log")
         update_job(job_id, duration_seconds=extract_duration_seconds(probe))
 
-        stage("extracting_audio", 18, "Extracting mono 16 kHz audio")
-        extract_audio(source, audio_path, logs_dir / "ffmpeg_extract.log")
+        stage("extracting_audio", 18, "Extracting normalized mono 16 kHz audio")
+        extract_audio(source, audio_path, logs_dir / "ffmpeg_extract.log", cfg)
 
         stage("transcribing", 45, "Transcribing audio with Faster Whisper")
         transcribe_to_srt(audio_path, source_srt, cfg)
@@ -243,8 +244,11 @@ def process_job(job_id: str) -> None:
         stage("translating", 70, "Translating subtitle cues")
         translate_srt(source_srt, translated_srt, cfg)
 
-        stage("creating_ass", 82, "Generating styled ASS subtitles")
-        srt_to_ass(translated_srt, ass_path, cfg)
+        stage("cleaning_subtitles", 78, "Applying subtitle timing and line-length quality rules")
+        clean_subtitle_quality(translated_srt, cleaned_srt, cfg)
+
+        stage("creating_ass", 84, "Generating styled ASS subtitles")
+        srt_to_ass(cleaned_srt, ass_path, cfg)
 
         stage("burning_subtitles", 92, "Burning subtitles into final video")
         burn_subtitles(source, ass_path, output_path, cfg, logs_dir / "burn.log")

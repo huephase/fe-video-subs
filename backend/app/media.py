@@ -34,8 +34,12 @@ def extract_duration_seconds(probe: dict) -> float | None:
     return float(duration) if duration else None
 
 
-def extract_audio(input_path: Path, audio_path: Path, log_path: Path) -> None:
+def extract_audio(input_path: Path, audio_path: Path, log_path: Path, cfg: dict) -> None:
     audio_path.parent.mkdir(parents=True, exist_ok=True)
+    whisper = cfg.get("whisper", {})
+    filter_args = []
+    if whisper.get("normalize_audio", True):
+        filter_args = ["-af", "loudnorm=I=-16:TP=-1.5:LRA=11"]
     run_command(
         [
             "ffmpeg",
@@ -43,6 +47,7 @@ def extract_audio(input_path: Path, audio_path: Path, log_path: Path) -> None:
             "-i",
             str(input_path),
             "-vn",
+            *filter_args,
             "-ac",
             "1",
             "-ar",
@@ -87,4 +92,3 @@ def claim_source(source_path: Path, processing_dir: Path, job_id: str) -> Path:
         return claimed
     shutil.move(str(source_path), str(claimed))
     return claimed
-

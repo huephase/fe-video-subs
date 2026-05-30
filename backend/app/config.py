@@ -32,6 +32,13 @@ class WhisperConfig(BaseModel):
     source_language: str | None = "en"
     beam_size: int = 5
     vad_filter: bool = True
+    normalize_audio: bool = True
+    chunking_enabled: bool = True
+    chunk_minutes: int = 20
+    chunk_overlap_seconds: int = 2
+    condition_on_previous_text: bool = False
+    no_speech_threshold: float = 0.8
+    temperature: float = 0.0
 
 
 class TranslationConfig(BaseModel):
@@ -58,6 +65,13 @@ class SubtitleConfig(BaseModel):
     back_color: str = "&H78000000"
     rtl_mode: str = "libass_native"
     rtl_preprocess_fallback: bool = False
+    quality_enabled: bool = True
+    max_chars_per_line: int = 38
+    max_lines: int = 2
+    max_cue_duration_seconds: float = 6.0
+    min_cue_duration_seconds: float = 1.0
+    min_gap_ms: int = 80
+    split_long_cues: bool = True
 
 
 class BurnConfig(BaseModel):
@@ -103,4 +117,3 @@ def save_config(payload: dict[str, Any]) -> AppConfig:
 def ensure_runtime_dirs(cfg: AppConfig) -> None:
     for path in cfg.paths.model_dump().values():
         Path(path).mkdir(parents=True, exist_ok=True)
-

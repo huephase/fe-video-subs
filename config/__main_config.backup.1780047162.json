@@ -17,14 +17,7 @@
     "compute_type": "int8",
     "source_language": "en",
     "beam_size": 5,
-    "vad_filter": false,
-    "normalize_audio": true,
-    "chunking_enabled": true,
-    "chunk_minutes": 20,
-    "chunk_overlap_seconds": 2,
-    "condition_on_previous_text": false,
-    "no_speech_threshold": 0.8,
-    "temperature": 0.0
+    "vad_filter": true
   },
   "translation": {
     "provider": "google_unofficial",
